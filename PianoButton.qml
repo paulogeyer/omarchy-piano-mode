@@ -63,6 +63,7 @@ BarWidget {
   FileView {
     path: root.flagPath
     watchChanges: true
+    printErrors: false
     onLoaded: if (!toggleProc.running) root.pianoOn = true
     onLoadFailed: root.pianoOn = false
   }
