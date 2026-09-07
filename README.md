@@ -72,9 +72,9 @@ are in range.
 
 When piano mode is on, the plugin connects **WU-BT10 AUDIO** whenever that
 device is paired, and keeps **WU-BT10 MIDI** up with a continuous LE scan
-(MIDI is unpaired; BlueZ deletes it if scan stops). Other Bluetooth speakers
-may be disconnected so AUDIO can connect (most adapters only allow one A2DP
-headset). The priority list then picks the default among connected devices.
+(MIDI is unpaired; BlueZ deletes it if scan stops). If another Bluetooth
+headset is already connected, AUDIO is left alone so that headset can stay
+up. The priority list then picks the default among connected devices.
 Turning piano mode off stops reconnecting and restores the previous
 output. It does not disconnect Bluetooth devices.
 
