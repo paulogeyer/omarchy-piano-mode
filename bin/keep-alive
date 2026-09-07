@@ -525,11 +525,16 @@ class WuBt10:
             dev for dev in self.connected_audio_devices()
             if (dev.get("address") or "").upper() != audio_addr.upper()
         ]
-        if others:
+        in_range = self.get_prop(audio_path, DEVICE_IFACE, "RSSI") is not None
+        if others and in_range:
             self.disconnect_other_audio(audio_addr)
             time.sleep(0.6)
             self.fail_until.pop(audio_addr, None)
             self.fail_delay.pop(audio_addr, None)
+        elif others and not in_range:
+            # Paired cache is not the same as the AUDIO radio answering.
+            # Don't steal another headset until WU-BT10 AUDIO is actually around.
+            return
         self.connect_path(audio_path, audio_addr, "WU-BT10 AUDIO", midi=False)
         if self.is_connected(audio_path):
             self.ensure_a2dp(audio_addr)
