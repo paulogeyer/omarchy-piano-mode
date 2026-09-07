@@ -38,8 +38,13 @@ BarWidget {
 
   function toggle() {
     if (toggleProc.running) return
-    root.pianoOn = !root.pianoOn
-    toggleProc.command = [pianoMode, "toggle"]
+    if (root.pianoOn) {
+      root.pianoOn = false
+      toggleProc.command = [pianoMode, "off"]
+    } else {
+      root.pianoOn = true
+      toggleProc.command = [pianoMode, "on"]
+    }
     toggleProc.running = true
   }
 
@@ -58,7 +63,7 @@ BarWidget {
   FileView {
     path: root.flagPath
     watchChanges: true
-    onLoaded: root.pianoOn = true
+    onLoaded: if (!toggleProc.running) root.pianoOn = true
     onLoadFailed: root.pianoOn = false
   }
 

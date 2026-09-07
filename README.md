@@ -74,7 +74,8 @@ When piano mode is on, the plugin connects **WU-BT10 AUDIO** whenever that
 device is paired, and keeps **WU-BT10 MIDI** up. Other Bluetooth speakers
 may be disconnected so AUDIO can connect (most adapters only allow one A2DP
 headset). The priority list then picks the default among connected devices.
-Turning piano mode off restores the previous output.
+Turning piano mode off stops reconnecting and restores the previous
+output. It does not disconnect Bluetooth devices.
 
 Right-click the piano icon (or run `omarchy-shell casio.wu-bt10-piano settings`)
 to toggle this and drag devices into order.

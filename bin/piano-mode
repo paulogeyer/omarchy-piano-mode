@@ -60,7 +60,6 @@ enable_mode() {
 
 disable_mode() {
   set_off
-  disconnect_resolved
 }
 
 status_text() {

@@ -620,10 +620,6 @@ class WuBt10:
                 else:
                     self.stop_discovery()
             else:
-                if audio_on and audio_path:
-                    self.disconnect_path(audio_path, "WU-BT10 AUDIO")
-                if midi_on and midi_path:
-                    self.disconnect_path(midi_path, "WU-BT10 MIDI")
                 self.a2dp_ready.clear()
                 self.stop_discovery()
 
