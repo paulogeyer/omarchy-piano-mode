@@ -5,7 +5,7 @@ Bluetooth dongle.
 
 Plugin id: `casio.wu-bt10-piano`
 
-![Status bar with piano mode on](images/status-bar.png)
+![Piano-mode icon on the status bar](images/status-bar.png)
 
 One bar button turns **piano mode** on or off. While it is on, the plugin
 keeps both WU-BT10 radios connected:
@@ -85,7 +85,7 @@ to toggle this and reorder the list.
 - `bin/keep-alive` — reconnect AUDIO + MIDI while piano mode is on
 - `Service.qml` — runs keep-alive with the shell, output-priority settings
 - `PianoButton.qml` — bar toggle (right-click for output settings)
-- `images/status-bar.png` — bar with piano mode on
+- `images/status-bar.png` — piano-mode icon on the bar
 
 ## License
 
