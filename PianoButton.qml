@@ -19,8 +19,8 @@ BarWidget {
   }
   readonly property string pianoMode: pluginDir + "/bin/piano-mode"
 
-  implicitWidth: button.implicitWidth
-  implicitHeight: button.implicitHeight
+  implicitWidth: vertical ? barSize : Style.bar.iconSlot
+  implicitHeight: vertical ? Style.bar.iconSlot : barSize
 
   function refresh() {
     if (!statusProc.running) statusProc.running = true
@@ -70,7 +70,9 @@ BarWidget {
     anchors.fill: parent
     bar: root.bar
     text: "\uEC1A"
+    slotSize: Style.bar.iconSlot
     dimmed: !root.pianoOn
+    keepSpace: true
     tooltipText: {
       if (!root.pianoOn) return "Piano mode"
       var bits = []
