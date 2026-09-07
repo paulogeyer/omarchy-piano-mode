@@ -1,0 +1,426 @@
+#!/usr/bin/env python3
+"""Keep Casio WU-BT10 AUDIO (A2DP) and MIDI (BLE) connected in piano mode.
+
+Discovers devices by BlueZ name (WU-BT10 AUDIO / WU-BT10 MIDI) so any Casio
+digital piano that uses the WU-BT10 dongle works. Optional MAC overrides live
+in ~/.config/omarchy/piano-mode.json.
+
+WU-BT10 MIDI is BLE-only, AddressType=random, and does not support pairing.
+Unpaired LE devices vanish after TemporaryTimeout unless Trusted while the
+object exists. Discovery must stay on this process's D-Bus connection.
+
+Does not touch other Bluetooth audio (headphones, speakers).
+"""
+from __future__ import annotations
+
+import json
+import os
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+from gi.repository import Gio, GLib
+
+PLUGIN_DIR = Path(__file__).resolve().parent.parent
+DEFAULTS_PATH = PLUGIN_DIR / "defaults.json"
+CONFIG_PATH = (
+    Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
+    / "omarchy"
+    / "piano-mode.json"
+)
+FLAG_DIR = Path.home() / ".local/state/omarchy/piano-mode"
+FLAG = FLAG_DIR / "enabled"
+COMPAT_FLAG = Path.home() / ".local/state/omarchy/indicators/piano-mode"
+SINK_STATE = FLAG_DIR / "previous-sink"
+
+BLUEZ = "org.bluez"
+DEVICE_IFACE = "org.bluez.Device1"
+ADAPTER_IFACE = "org.bluez.Adapter1"
+PROPS_IFACE = "org.freedesktop.DBus.Properties"
+OBJECT_MANAGER = "org.freedesktop.DBus.ObjectManager"
+
+POLL_OK_S = 8
+POLL_SCAN_S = 3
+CONNECT_TIMEOUT_MS = 8000
+MIDI_CONNECT_TIMEOUT_MS = 20000
+BACKOFF_MAX_S = 60
+BUSY_RETRY_S = 2
+
+
+def log(msg: str) -> None:
+    print(msg, flush=True)
+
+
+def load_config() -> dict:
+    cfg = {}
+    if DEFAULTS_PATH.is_file():
+        try:
+            cfg.update(json.loads(DEFAULTS_PATH.read_text()))
+        except (OSError, json.JSONDecodeError):
+            pass
+    if CONFIG_PATH.is_file():
+        try:
+            overlay = json.loads(CONFIG_PATH.read_text())
+            if isinstance(overlay, dict):
+                cfg.update(overlay)
+        except (OSError, json.JSONDecodeError):
+            pass
+    cfg.setdefault("audioName", "WU-BT10 AUDIO")
+    cfg.setdefault("midiName", "WU-BT10 MIDI")
+    cfg.setdefault("audioAddress", "")
+    cfg.setdefault("midiAddress", "")
+    cfg.setdefault("adapter", "hci0")
+    cfg.setdefault("setDefaultSink", True)
+    return cfg
+
+
+def piano_mode_on() -> bool:
+    return FLAG.exists() or COMPAT_FLAG.exists()
+
+
+class WuBt10:
+    def __init__(self) -> None:
+        self.cfg = load_config()
+        self.bus = Gio.bus_get_sync(Gio.BusType.SYSTEM, None)
+        self.adapter = f"/org/bluez/{self.cfg['adapter']}"
+        self.discovering = False
+        self.le_filter = False
+        self.fail_until: dict[str, float] = {}
+        self.fail_delay: dict[str, float] = {}
+        self.last_wait_log = 0.0
+        self.a2dp_ready: set[str] = set()
+        self.saved_sink = ""
+
+    def call(self, path: str, iface: str, method: str, params: GLib.Variant | None,
+             timeout_ms: int = 5000) -> GLib.Variant | None:
+        try:
+            return self.bus.call_sync(
+                BLUEZ, path, iface, method, params, None,
+                Gio.DBusCallFlags.NONE, timeout_ms, None,
+            )
+        except GLib.Error as exc:
+            msg = exc.message or str(exc)
+            if "InProgress" in msg or "Already Exists" in msg or "Already Connected" in msg:
+                return GLib.Variant("()", ())
+            raise
+
+    def get_prop(self, path: str, iface: str, name: str):
+        try:
+            reply = self.bus.call_sync(
+                BLUEZ, path, PROPS_IFACE, "Get",
+                GLib.Variant("(ss)", (iface, name)),
+                GLib.VariantType("(v)"),
+                Gio.DBusCallFlags.NONE, 3000, None,
+            )
+        except GLib.Error:
+            return None
+        return reply.unpack()[0]
+
+    def set_prop(self, path: str, iface: str, name: str, value: GLib.Variant) -> None:
+        try:
+            self.bus.call_sync(
+                BLUEZ, path, PROPS_IFACE, "Set",
+                GLib.Variant("(ssv)", (iface, name, value)),
+                None, Gio.DBusCallFlags.NONE, 3000, None,
+            )
+        except GLib.Error:
+            pass
+
+    def managed_devices(self) -> list[tuple[str, dict]]:
+        try:
+            reply = self.bus.call_sync(
+                BLUEZ, "/", OBJECT_MANAGER, "GetManagedObjects",
+                None, GLib.VariantType("(a{oa{sa{sv}}})"),
+                Gio.DBusCallFlags.NONE, 5000, None,
+            )
+        except GLib.Error:
+            return []
+        out = []
+        objects = reply.unpack()[0]
+        for path, ifaces in objects.items():
+            props = ifaces.get(DEVICE_IFACE)
+            if not props:
+                continue
+            out.append((path, props))
+        return out
+
+    def match_device(self, want_name: str, want_addr: str) -> tuple[str, str]:
+        want_addr = (want_addr or "").strip().upper()
+        want_name = (want_name or "").strip()
+        for path, props in self.managed_devices():
+            addr = str(props.get("Address") or "")
+            name = str(props.get("Name") or props.get("Alias") or "")
+            if want_addr and addr.upper() == want_addr:
+                return addr, path
+            if want_name and name == want_name:
+                return addr, path
+        return "", ""
+
+    def resolve(self) -> dict:
+        audio_addr, audio_path = self.match_device(
+            self.cfg["audioName"], self.cfg.get("audioAddress") or ""
+        )
+        midi_addr, midi_path = self.match_device(
+            self.cfg["midiName"], self.cfg.get("midiAddress") or ""
+        )
+        return {
+            "audioAddress": audio_addr,
+            "audioPath": audio_path,
+            "midiAddress": midi_addr,
+            "midiPath": midi_path,
+            "audioConnected": self.get_prop(audio_path, DEVICE_IFACE, "Connected") is True if audio_path else False,
+            "midiConnected": self.get_prop(midi_path, DEVICE_IFACE, "Connected") is True if midi_path else False,
+            "pianoMode": piano_mode_on(),
+        }
+
+    def device_path(self, mac: str) -> str:
+        return f"{self.adapter}/dev_{mac.replace(':', '_')}"
+
+    def is_connected(self, path: str) -> bool:
+        return bool(path) and self.get_prop(path, DEVICE_IFACE, "Connected") is True
+
+    def adapter_discovering(self) -> bool:
+        return self.get_prop(self.adapter, ADAPTER_IFACE, "Discovering") is True
+
+    def set_connectable(self) -> None:
+        if self.get_prop(self.adapter, ADAPTER_IFACE, "Connectable") is True:
+            return
+        self.set_prop(self.adapter, ADAPTER_IFACE, "Connectable", GLib.Variant("b", True))
+
+    def set_le_filter(self, le_only: bool) -> None:
+        if self.le_filter == le_only and self.discovering:
+            return
+        if self.discovering:
+            self.stop_discovery()
+        try:
+            filt = {}
+            if le_only:
+                filt = {
+                    "Transport": GLib.Variant("s", "le"),
+                    "DuplicateData": GLib.Variant("b", True),
+                }
+            self.call(
+                self.adapter, ADAPTER_IFACE, "SetDiscoveryFilter",
+                GLib.Variant("(a{sv})", (filt,)),
+            )
+            self.le_filter = le_only
+        except GLib.Error as exc:
+            log(f"SetDiscoveryFilter: {exc.message}")
+
+    def start_discovery(self, le_only: bool = True) -> None:
+        if self.adapter_discovering() and not self.discovering:
+            # Another client (for example a headset keep-alive) already holds scan.
+            return
+        self.set_le_filter(le_only)
+        if self.discovering:
+            return
+        try:
+            self.call(self.adapter, ADAPTER_IFACE, "StartDiscovery", None)
+            self.discovering = True
+            log("LE scan on")
+        except GLib.Error as exc:
+            if "InProgress" in (exc.message or ""):
+                self.discovering = True
+            else:
+                log(f"StartDiscovery: {exc.message}")
+
+    def stop_discovery(self) -> None:
+        if not self.discovering:
+            return
+        try:
+            self.call(self.adapter, ADAPTER_IFACE, "StopDiscovery", None)
+        except GLib.Error:
+            pass
+        self.discovering = False
+        log("scan off")
+
+    def disconnect_path(self, path: str, label: str) -> None:
+        if not self.is_connected(path):
+            return
+        try:
+            self.call(path, DEVICE_IFACE, "Disconnect", None)
+            log(f"disconnected {label}")
+        except GLib.Error as exc:
+            log(f"{label} disconnect: {exc.message}")
+
+    def connect_path(self, path: str, mac: str, label: str, midi: bool) -> None:
+        now = time.monotonic()
+        if now < self.fail_until.get(mac, 0):
+            return
+        if not path:
+            return
+        self.set_prop(path, DEVICE_IFACE, "Blocked", GLib.Variant("b", False))
+        self.set_prop(path, DEVICE_IFACE, "Trusted", GLib.Variant("b", True))
+        if self.is_connected(path):
+            return
+        log(f"connecting {label} ({mac})")
+        timeout_ms = MIDI_CONNECT_TIMEOUT_MS if midi else CONNECT_TIMEOUT_MS
+        try:
+            self.call(path, DEVICE_IFACE, "Connect", None, timeout_ms)
+        except GLib.Error as exc:
+            msg = exc.message or str(exc)
+            if any(s in msg for s in ("InProgress", "br-connection-busy", "Already Connected")):
+                self.fail_until[mac] = now + BUSY_RETRY_S
+                log(f"{label} adapter busy; retry in {BUSY_RETRY_S}s")
+                return
+            delay = 5 if midi else min((self.fail_delay.get(mac, 4) * 2), BACKOFF_MAX_S)
+            if not midi:
+                self.fail_delay[mac] = delay
+            self.fail_until[mac] = now + delay
+            log(f"{label} connect failed: {msg}; retry in {int(delay)}s")
+            return
+        time.sleep(0.4)
+        if self.is_connected(path):
+            self.fail_delay.pop(mac, None)
+            self.fail_until.pop(mac, None)
+            log(f"{label} connected")
+        else:
+            delay = 5 if midi else min((self.fail_delay.get(mac, 4) * 2), BACKOFF_MAX_S)
+            if not midi:
+                self.fail_delay[mac] = delay
+            self.fail_until[mac] = now + delay
+            log(f"{label} connect returned but not connected; retry in {int(delay)}s")
+
+    def ensure_a2dp(self, mac: str) -> None:
+        if not mac:
+            return
+        card = "bluez_card." + mac.replace(":", "_")
+        if mac in self.a2dp_ready:
+            return
+        try:
+            subprocess.run(
+                ["pactl", "set-card-profile", card, "a2dp-sink"],
+                check=False, timeout=5, capture_output=True,
+            )
+            self.a2dp_ready.add(mac)
+            log(f"A2DP profile set on {card}")
+        except subprocess.SubprocessError as exc:
+            log(f"A2DP profile {card}: {exc}")
+
+    def current_sink(self) -> str:
+        try:
+            return subprocess.check_output(
+                ["pactl", "get-default-sink"], text=True, timeout=3
+            ).strip()
+        except subprocess.SubprocessError:
+            return ""
+
+    def apply_sink(self, audio_mac: str, connected: bool, piano: bool) -> None:
+        if not self.cfg.get("setDefaultSink", True):
+            return
+        FLAG_DIR.mkdir(parents=True, exist_ok=True)
+        pattern = "bluez_output." + audio_mac.replace(":", "_") if audio_mac else ""
+        if piano and connected and pattern:
+            current = self.current_sink()
+            if pattern not in current:
+                if current and not SINK_STATE.exists():
+                    SINK_STATE.write_text(current + "\n")
+                try:
+                    raw = subprocess.check_output(
+                        ["pactl", "--format=json", "list", "sinks"], text=True, timeout=3
+                    )
+                    sinks = json.loads(raw)
+                except (subprocess.SubprocessError, json.JSONDecodeError):
+                    return
+                wanted = ""
+                for sink in sinks:
+                    name = sink.get("name") or ""
+                    if pattern in name:
+                        wanted = name
+                        break
+                if wanted and wanted != current:
+                    subprocess.run(
+                        ["pactl", "set-default-sink", wanted],
+                        check=False, timeout=3, capture_output=True,
+                    )
+                    log(f"default sink -> {wanted}")
+            return
+        if not piano and SINK_STATE.exists():
+            prev = SINK_STATE.read_text().strip()
+            SINK_STATE.unlink(missing_ok=True)
+            if prev:
+                subprocess.run(
+                    ["pactl", "set-default-sink", prev],
+                    check=False, timeout=3, capture_output=True,
+                )
+                log(f"default sink restored -> {prev}")
+
+    def loop(self) -> None:
+        log("watching Casio WU-BT10 AUDIO + MIDI while piano mode is on")
+        last_piano = None
+        while True:
+            self.set_connectable()
+            self.cfg = load_config()
+            piano = piano_mode_on()
+            if last_piano is not None and piano != last_piano:
+                log("piano mode " + ("on" if piano else "off"))
+            last_piano = piano
+
+            info = self.resolve()
+            audio_addr, audio_path = info["audioAddress"], info["audioPath"]
+            midi_addr, midi_path = info["midiAddress"], info["midiPath"]
+            audio_on = info["audioConnected"]
+            midi_on = info["midiConnected"]
+
+            if piano:
+                if midi_path:
+                    self.set_prop(midi_path, DEVICE_IFACE, "Trusted", GLib.Variant("b", True))
+                    self.set_prop(midi_path, DEVICE_IFACE, "Blocked", GLib.Variant("b", False))
+                if midi_on:
+                    self.fail_until.pop(midi_addr, None)
+                    self.fail_delay.pop(midi_addr, None)
+                else:
+                    if midi_path and midi_addr:
+                        self.connect_path(midi_path, midi_addr, "WU-BT10 MIDI", midi=True)
+                    now = time.monotonic()
+                    if now - self.last_wait_log >= 30 and not midi_path:
+                        log("waiting for WU-BT10 MIDI advertisement (piano must be on)")
+                        self.last_wait_log = now
+                if not audio_on and audio_path and audio_addr:
+                    self.connect_path(audio_path, audio_addr, "WU-BT10 AUDIO", midi=False)
+                if audio_on and audio_addr:
+                    self.ensure_a2dp(audio_addr)
+                if piano and not midi_on:
+                    self.start_discovery(le_only=True)
+                else:
+                    self.stop_discovery()
+            else:
+                if audio_on and audio_path:
+                    self.disconnect_path(audio_path, "WU-BT10 AUDIO")
+                if midi_on and midi_path:
+                    self.disconnect_path(midi_path, "WU-BT10 MIDI")
+                self.a2dp_ready.clear()
+                self.stop_discovery()
+
+            self.apply_sink(audio_addr, audio_on, piano)
+            time.sleep(POLL_SCAN_S if (piano and not midi_on) else POLL_OK_S)
+
+
+def print_status() -> int:
+    info = WuBt10().resolve()
+    info["enabled"] = piano_mode_on()
+    json.dump(info, sys.stdout)
+    sys.stdout.write("\n")
+    return 0
+
+
+def main(argv: list[str]) -> int:
+    cmd = argv[1] if len(argv) > 1 else ""
+    if cmd in ("-h", "--help", "help"):
+        print("Usage: keep-alive | keep-alive status")
+        return 0
+    if cmd == "status":
+        return print_status()
+    try:
+        WuBt10().loop()
+    except KeyboardInterrupt:
+        return 0
+    except Exception as exc:
+        log(f"fatal: {exc}")
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

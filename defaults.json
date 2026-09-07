@@ -1,0 +1,8 @@
+{
+  "audioName": "WU-BT10 AUDIO",
+  "midiName": "WU-BT10 MIDI",
+  "audioAddress": "",
+  "midiAddress": "",
+  "adapter": "hci0",
+  "setDefaultSink": true
+}

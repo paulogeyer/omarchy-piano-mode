@@ -1,0 +1,99 @@
+#!/usr/bin/env bash
+# Toggle Casio WU-BT10 AUDIO + MIDI piano mode for Omarchy.
+set -euo pipefail
+
+SCRIPT_PATH="$(readlink -f "$0" 2>/dev/null || realpath "$0" 2>/dev/null || echo "$0")"
+PLUGIN_DIR="$(cd "$(dirname "$SCRIPT_PATH")/.." && pwd)"
+KEEP_ALIVE="$PLUGIN_DIR/bin/keep-alive"
+STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/omarchy/piano-mode"
+STATE="$STATE_DIR/enabled"
+COMPAT_STATE="${XDG_STATE_HOME:-$HOME/.local/state}/omarchy/indicators/piano-mode"
+
+is_on() { [[ -f $STATE || -f $COMPAT_STATE ]]; }
+
+set_on() {
+  mkdir -p "$STATE_DIR" "$(dirname "$COMPAT_STATE")"
+  touch "$STATE" "$COMPAT_STATE"
+}
+
+set_off() {
+  rm -f "$STATE" "$COMPAT_STATE"
+}
+
+connect_resolved() {
+  command -v bluetoothctl >/dev/null 2>&1 || return 0
+  command -v python3 >/dev/null 2>&1 || return 0
+  local json audio midi
+  json=$(python3 "$KEEP_ALIVE" status 2>/dev/null || true)
+  [[ -n $json ]] || return 0
+  audio=$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("audioAddress") or "")' "$json")
+  midi=$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("midiAddress") or "")' "$json")
+  if [[ -n $audio ]]; then
+    bluetoothctl unblock "$audio" >/dev/null 2>&1 || true
+    bluetoothctl trust "$audio" >/dev/null 2>&1 || true
+    bluetoothctl connect "$audio" >/dev/null 2>&1 || true
+  fi
+  if [[ -n $midi ]]; then
+    bluetoothctl unblock "$midi" >/dev/null 2>&1 || true
+    bluetoothctl trust "$midi" >/dev/null 2>&1 || true
+    bluetoothctl connect "$midi" >/dev/null 2>&1 || true
+  fi
+}
+
+disconnect_resolved() {
+  command -v bluetoothctl >/dev/null 2>&1 || return 0
+  command -v python3 >/dev/null 2>&1 || return 0
+  local json audio midi
+  json=$(python3 "$KEEP_ALIVE" status 2>/dev/null || true)
+  [[ -n $json ]] || return 0
+  audio=$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("audioAddress") or "")' "$json")
+  midi=$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("midiAddress") or "")' "$json")
+  [[ -n $audio ]] && bluetoothctl disconnect "$audio" >/dev/null 2>&1 || true
+  [[ -n $midi ]] && bluetoothctl disconnect "$midi" >/dev/null 2>&1 || true
+}
+
+enable_mode() {
+  set_on
+  connect_resolved &
+  wait || true
+}
+
+disable_mode() {
+  set_off
+  disconnect_resolved
+}
+
+status_text() {
+  if is_on; then echo on; else echo off; fi
+}
+
+status_json() {
+  python3 "$KEEP_ALIVE" status
+}
+
+usage() {
+  cat <<'EOF'
+Usage: piano-mode [status|on|off|toggle]
+       piano-mode status --json
+
+Connects Casio WU-BT10 AUDIO (A2DP) and WU-BT10 MIDI (BLE) for Casio
+digital pianos. Devices are found by BlueZ name unless addresses are set
+in ~/.config/omarchy/piano-mode.json.
+EOF
+}
+
+case "${1:-status}" in
+  -h|--help|help) usage ;;
+  status)
+    if [[ ${2:-} == --json ]]; then status_json; else status_text; fi
+    ;;
+  on) enable_mode ;;
+  off) disable_mode ;;
+  toggle)
+    if is_on; then disable_mode; else enable_mode; fi
+    ;;
+  *)
+    usage >&2
+    exit 1
+    ;;
+esac
