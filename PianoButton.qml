@@ -38,6 +38,7 @@ BarWidget {
 
   function toggle() {
     if (toggleProc.running) return
+    root.pianoOn = !root.pianoOn
     toggleProc.command = [pianoMode, "toggle"]
     toggleProc.running = true
   }
@@ -80,8 +81,6 @@ BarWidget {
           root.audioOn = info.audioConnected === true
           root.midiOn = info.midiConnected === true
           root.audioExpected = info.audioExpected === true
-          if (info.enabled === true || info.pianoMode === true)
-            root.pianoOn = true
         } catch (e) {
         }
       }
