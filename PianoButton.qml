@@ -32,6 +32,16 @@ BarWidget {
     toggleProc.running = true
   }
 
+  function openSettings() {
+    var svc = root.bar && root.bar.shell && typeof root.bar.shell.serviceFor === "function"
+      ? root.bar.shell.serviceFor("casio.wu-bt10-piano")
+      : null
+    if (svc && typeof svc.openSettings === "function")
+      svc.openSettings()
+    else
+      Quickshell.execDetached(["omarchy-shell", "casio.wu-bt10-piano", "settings"])
+  }
+
   Component.onCompleted: refresh()
 
   Timer {
@@ -80,6 +90,9 @@ BarWidget {
       bits.push(root.midiOn ? "MIDI on" : "MIDI off")
       return "Piano mode on — " + bits.join(", ")
     }
-    onPressed: function() { root.toggle() }
+    onPressed: function(b) {
+      if (b === Qt.RightButton) root.openSettings()
+      else root.toggle()
+    }
   }
 }

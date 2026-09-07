@@ -5,6 +5,8 @@ Bluetooth dongle.
 
 Plugin id: `casio.wu-bt10-piano`
 
+![Status bar with piano mode on](images/status-bar.png)
+
 One bar button turns **piano mode** on or off. While it is on, the plugin
 keeps both WU-BT10 radios connected:
 
@@ -60,23 +62,30 @@ exclusively.
   "audioAddress": "",
   "midiAddress": "",
   "adapter": "hci0",
-  "setDefaultSink": true
+  "setDefaultSink": true,
+  "sinkPriority": ["WU-BT10 AUDIO", "HDMI", "Headphones", "Speaker"]
 }
 ```
 
 Empty addresses mean “match by name”. Set MACs if several WU-BT10 dongles
 are in range.
 
-When piano mode is on and AUDIO is connected, the default PipeWire sink
-switches to WU-BT10 AUDIO (A2DP). Turning piano mode off restores the
-previous sink.
+When piano mode is on, the plugin can set the default PipeWire output from
+an ordered list. **WU-BT10 AUDIO** is first by default, so the piano speakers
+win when they are connected. Later entries are fallbacks (HDMI, headphones,
+laptop speaker, or any live sink you add). Turning piano mode off restores
+the previous output.
+
+Right-click the piano icon (or run `omarchy-shell casio.wu-bt10-piano settings`)
+to toggle this and reorder the list.
 
 ## Files
 
 - `bin/piano-mode` — `on` / `off` / `toggle` / `status`
 - `bin/keep-alive` — reconnect AUDIO + MIDI while piano mode is on
-- `Service.qml` — runs keep-alive with the shell
-- `PianoButton.qml` — bar toggle
+- `Service.qml` — runs keep-alive with the shell, output-priority settings
+- `PianoButton.qml` — bar toggle (right-click for output settings)
+- `images/status-bar.png` — bar with piano mode on
 
 ## License
 
