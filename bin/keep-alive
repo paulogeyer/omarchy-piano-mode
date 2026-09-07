@@ -626,8 +626,13 @@ class WuBt10:
 
 
 def print_status() -> int:
-    info = WuBt10().resolve()
-    info["enabled"] = piano_mode_on()
+    w = WuBt10()
+    info = w.resolve()
+    piano = piano_mode_on()
+    info["enabled"] = piano
+    info["pianoMode"] = piano
+    info["audioExpected"] = piano and w.is_piano_audio(w.preferred_pattern())
+    info["midiExpected"] = piano
     json.dump(info, sys.stdout)
     sys.stdout.write("\n")
     return 0

@@ -79,6 +79,10 @@ restores the previous output.
 Right-click the piano icon (or run `omarchy-shell casio.wu-bt10-piano settings`)
 to toggle this and drag devices into order.
 
+While piano mode is on, the bar icon turns **yellow** if AUDIO or MIDI is
+missing, and **red** if both are. A notification is sent after a short
+connect grace if a needed radio stays down.
+
 ## Files
 
 - `bin/piano-mode` — `on` / `off` / `toggle` / `status`

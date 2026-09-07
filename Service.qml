@@ -28,6 +28,11 @@ Item {
   property var liveSinks: []
   property bool hydrating: false
   property bool dragging: false
+  property bool pianoOn: false
+  property bool audioOn: false
+  property bool midiOn: false
+  property bool audioExpected: false
+  property string notifiedMissing: ""
 
   property color background: Color.menu.background
   property color foreground: Color.menu.text
@@ -176,6 +181,63 @@ Item {
     applyProc.running = true
   }
 
+  function missingKey() {
+    if (!pianoOn) return ""
+    var parts = []
+    if (audioExpected && !audioOn) parts.push("AUDIO")
+    if (!midiOn) parts.push("MIDI")
+    return parts.join("+")
+  }
+
+  function applyStatus(raw) {
+    var info = {}
+    try { info = JSON.parse(String(raw || "{}")) } catch (e) { return }
+    var wasOn = pianoOn
+    pianoOn = info.enabled === true || info.pianoMode === true
+    audioOn = info.audioConnected === true
+    midiOn = info.midiConnected === true
+    audioExpected = info.audioExpected === true
+    if (pianoOn && !wasOn) {
+      notifiedMissing = ""
+      notifyGrace.restart()
+      return
+    }
+    if (!pianoOn) {
+      notifiedMissing = ""
+      notifyGrace.stop()
+      return
+    }
+    if (notifyGrace.running) return
+    notifyIfMissing()
+  }
+
+  function notifyIfMissing() {
+    var key = missingKey()
+    if (!key) {
+      notifiedMissing = ""
+      return
+    }
+    if (key === notifiedMissing) return
+    notifiedMissing = key
+    var both = key.indexOf("+") !== -1
+    var title = "WU-BT10 " + key.replace("+", " and ") + " unavailable"
+    var body = both
+      ? "Piano mode is on, but neither AUDIO nor MIDI is connected."
+      : (key === "AUDIO"
+        ? "Piano mode is on, but the piano speakers are not connected."
+        : "Piano mode is on, but MIDI is not connected.")
+    Quickshell.execDetached([
+      "notify-send",
+      "--app-name=Piano Mode",
+      "--urgency=" + (both ? "critical" : "normal"),
+      "--expire-time=10000",
+      "--icon=audio-headphones",
+      "--replace-id=42110",
+      title,
+      body
+    ])
+  }
+
   function moveDevice(from, to) {
     if (from === to || from < 0 || to < 0 || to >= deviceModel.count) return
     dragging = true
@@ -244,6 +306,31 @@ Item {
   Process {
     id: toggleProc
     running: false
+  }
+
+  Timer {
+    interval: 2000
+    running: root.pluginDir !== ""
+    repeat: true
+    triggeredOnStart: true
+    onTriggered: if (!healthProc.running) healthProc.running = true
+  }
+
+  Timer {
+    id: notifyGrace
+    interval: 12000
+    repeat: false
+    onTriggered: root.notifyIfMissing()
+  }
+
+  Process {
+    id: healthProc
+    command: [root.pianoMode, "status", "--json"]
+    running: false
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: root.applyStatus(String(text || "{}"))
+    }
   }
 
   Process {

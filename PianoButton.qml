@@ -11,6 +11,11 @@ BarWidget {
   property bool pianoOn: false
   property bool audioOn: false
   property bool midiOn: false
+  property bool audioExpected: false
+
+  readonly property bool audioBad: pianoOn && !audioOn
+  readonly property bool midiBad: pianoOn && !midiOn
+  readonly property color warnColor: (audioBad && midiBad) ? Color.urgent : "#e0b04a"
 
   readonly property string pluginDir: {
     var home = Quickshell.env("HOME") || ""
@@ -63,6 +68,7 @@ BarWidget {
           root.pianoOn = info.enabled === true || info.pianoMode === true
           root.audioOn = info.audioConnected === true
           root.midiOn = info.midiConnected === true
+          root.audioExpected = info.audioExpected === true
         } catch (e) {
         }
       }
@@ -82,12 +88,16 @@ BarWidget {
     text: "\uEC1A"
     slotSize: Style.bar.iconSlot
     dimmed: !root.pianoOn
+    useActiveColor: false
+    foreground: (root.audioBad || root.midiBad)
+                ? root.warnColor
+                : (root.bar ? root.bar.barForeground : Color.foreground)
     keepSpace: true
     tooltipText: {
       if (!root.pianoOn) return "Piano mode"
       var bits = []
-      bits.push(root.audioOn ? "AUDIO on" : "AUDIO off")
-      bits.push(root.midiOn ? "MIDI on" : "MIDI off")
+      bits.push(root.audioOn ? "AUDIO on" : "AUDIO missing")
+      bits.push(root.midiOn ? "MIDI on" : "MIDI missing")
       return "Piano mode on — " + bits.join(", ")
     }
     onPressed: function(b) {
