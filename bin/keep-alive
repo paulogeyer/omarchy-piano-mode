@@ -215,6 +215,9 @@ class WuBt10:
     def is_connected(self, path: str) -> bool:
         return bool(path) and self.get_prop(path, DEVICE_IFACE, "Connected") is True
 
+    def is_paired(self, path: str) -> bool:
+        return bool(path) and self.get_prop(path, DEVICE_IFACE, "Paired") is True
+
     def adapter_discovering(self) -> bool:
         return self.get_prop(self.adapter, ADAPTER_IFACE, "Discovering") is True
 
@@ -506,26 +509,30 @@ class WuBt10:
                 self.a2dp_ready.discard(addr.lower())
 
     def route_audio(self, info: dict) -> None:
-        prefer = self.preferred_pattern()
-        audio_addr, audio_path = info.get("audioAddress") or "", info.get("audioPath") or ""
-        audio_on = info.get("audioConnected") is True
-        if self.is_piano_audio(prefer):
-            if audio_addr:
-                self.disconnect_other_audio(audio_addr)
-            if not audio_on and audio_path and audio_addr:
-                self.connect_path(audio_path, audio_addr, "WU-BT10 AUDIO", midi=False)
-            if self.is_connected(audio_path) and audio_addr:
-                self.ensure_a2dp(audio_addr)
+        self.connect_piano_audio(info)
+
+    def connect_piano_audio(self, info: dict) -> None:
+        audio_addr = info.get("audioAddress") or ""
+        audio_path = info.get("audioPath") or ""
+        if not audio_addr or not audio_path:
             return
-        if audio_on and audio_path:
-            self.disconnect_path(audio_path, "WU-BT10 AUDIO")
-        mac, path, label = self.match_output(prefer)
-        if mac and path:
-            self.disconnect_other_audio(mac)
-            if not self.is_connected(path):
-                self.connect_path(path, mac, label, midi=False)
-            if self.is_connected(path):
-                self.ensure_a2dp(mac)
+        if self.is_connected(audio_path):
+            self.ensure_a2dp(audio_addr)
+            return
+        if not self.is_paired(audio_path):
+            return
+        others = [
+            dev for dev in self.connected_audio_devices()
+            if (dev.get("address") or "").upper() != audio_addr.upper()
+        ]
+        if others:
+            self.disconnect_other_audio(audio_addr)
+            time.sleep(0.6)
+            self.fail_until.pop(audio_addr, None)
+            self.fail_delay.pop(audio_addr, None)
+        self.connect_path(audio_path, audio_addr, "WU-BT10 AUDIO", midi=False)
+        if self.is_connected(audio_path):
+            self.ensure_a2dp(audio_addr)
 
     def apply_priority(self) -> None:
         self.cfg = load_config()
@@ -567,7 +574,7 @@ class WuBt10:
                 log(f"default sink restored -> {prev}")
 
     def loop(self) -> None:
-        log("watching Casio WU-BT10 MIDI; Bluetooth output follows sink priority")
+        log("watching Casio WU-BT10 AUDIO + MIDI; connect paired AUDIO in piano mode")
         last_piano = None
         last_priority = None
         while True:
@@ -617,12 +624,8 @@ class WuBt10:
 
             info = self.resolve()
             self.apply_sink(info["audioAddress"], info["audioConnected"], piano)
-            waiting_output = False
-            if piano:
-                prefer = self.preferred_pattern()
-                mac, path, _label = self.match_output(prefer)
-                waiting_output = bool(path) and not self.is_connected(path)
-            time.sleep(POLL_SCAN_S if (piano and (not midi_on or waiting_output)) else POLL_OK_S)
+            waiting_audio = bool(piano and audio_path and not self.is_connected(audio_path))
+            time.sleep(POLL_SCAN_S if (piano and (not midi_on or waiting_audio)) else POLL_OK_S)
 
 
 def print_status() -> int:
@@ -631,7 +634,7 @@ def print_status() -> int:
     piano = piano_mode_on()
     info["enabled"] = piano
     info["pianoMode"] = piano
-    info["audioExpected"] = piano and w.is_piano_audio(w.preferred_pattern())
+    info["audioExpected"] = piano
     info["midiExpected"] = piano
     json.dump(info, sys.stdout)
     sys.stdout.write("\n")
