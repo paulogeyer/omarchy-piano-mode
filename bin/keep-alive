@@ -52,6 +52,9 @@ def log(msg: str) -> None:
     print(msg, flush=True)
 
 
+AUDIO_SINK_UUID = "0000110b-0000-1000-8000-00805f9b34fb"
+
+
 def is_bluetooth(obj: dict) -> bool:
     props = obj.get("properties") or {}
     if str(props.get("device.bus") or "").lower() == "bluetooth":
@@ -61,6 +64,16 @@ def is_bluetooth(obj: dict) -> bool:
         return True
     name = str(obj.get("name") or "")
     return name.startswith("bluez_output.") or name.startswith("bluez_card.")
+
+
+def mac_from_bluez_name(name: str) -> str:
+    raw = str(name or "")
+    for prefix in ("bluez_output.", "bluez_card."):
+        if raw.startswith(prefix):
+            token = raw[len(prefix):].split(".")[0]
+            if token.count("_") == 5:
+                return token.replace("_", ":").upper()
+    return ""
 
 
 def load_config() -> dict:
@@ -431,6 +444,99 @@ class WuBt10:
                     return sink["name"]
         return ""
 
+    def preferred_pattern(self) -> str:
+        pri = self.cfg.get("sinkPriority") or []
+        for item in pri:
+            text = str(item or "").strip()
+            if text:
+                return text
+        return str(self.cfg.get("audioName") or "WU-BT10 AUDIO")
+
+    def is_piano_audio(self, pattern: str) -> bool:
+        pat = (pattern or "").strip().lower()
+        name = str(self.cfg.get("audioName") or "WU-BT10 AUDIO").strip().lower()
+        return bool(pat) and (pat == name or "wu-bt10 audio" in pat)
+
+    def match_output(self, pattern: str) -> tuple[str, str, str]:
+        pat = (pattern or "").strip()
+        if not pat:
+            return "", "", ""
+        if self.is_piano_audio(pat):
+            addr, path = self.match_device(
+                self.cfg.get("audioName") or "WU-BT10 AUDIO",
+                self.cfg.get("audioAddress") or "",
+            )
+            return addr, path, self.cfg.get("audioName") or "WU-BT10 AUDIO"
+        for sink in self.list_bluetooth_outputs():
+            if self.sink_matches(sink, pat, ""):
+                mac = mac_from_bluez_name(sink.get("name") or "")
+                if mac:
+                    return mac, self.device_path(mac), sink.get("description") or pat
+        want = pat.lower()
+        for path, props in self.managed_devices():
+            name = str(props.get("Name") or props.get("Alias") or "")
+            if want and want in name.lower():
+                return str(props.get("Address") or ""), path, name or pat
+        return "", "", pat
+
+    def connected_audio_devices(self) -> list[dict]:
+        out = []
+        for path, props in self.managed_devices():
+            if props.get("Connected") is not True:
+                continue
+            uuids = [str(u).lower() for u in (props.get("UUIDs") or [])]
+            if AUDIO_SINK_UUID not in uuids:
+                continue
+            out.append({
+                "address": str(props.get("Address") or ""),
+                "path": path,
+                "name": str(props.get("Name") or props.get("Alias") or ""),
+            })
+        return out
+
+    def disconnect_other_audio(self, keep_mac: str) -> None:
+        keep = (keep_mac or "").upper()
+        for dev in self.connected_audio_devices():
+            addr = (dev.get("address") or "").upper()
+            if keep and addr == keep:
+                continue
+            self.disconnect_path(dev.get("path") or "", dev.get("name") or addr)
+            if addr:
+                self.a2dp_ready.discard(addr)
+                self.a2dp_ready.discard(addr.lower())
+
+    def route_audio(self, info: dict) -> None:
+        prefer = self.preferred_pattern()
+        audio_addr, audio_path = info.get("audioAddress") or "", info.get("audioPath") or ""
+        audio_on = info.get("audioConnected") is True
+        if self.is_piano_audio(prefer):
+            if audio_addr:
+                self.disconnect_other_audio(audio_addr)
+            if not audio_on and audio_path and audio_addr:
+                self.connect_path(audio_path, audio_addr, "WU-BT10 AUDIO", midi=False)
+            if self.is_connected(audio_path) and audio_addr:
+                self.ensure_a2dp(audio_addr)
+            return
+        if audio_on and audio_path:
+            self.disconnect_path(audio_path, "WU-BT10 AUDIO")
+        mac, path, label = self.match_output(prefer)
+        if mac and path:
+            self.disconnect_other_audio(mac)
+            if not self.is_connected(path):
+                self.connect_path(path, mac, label, midi=False)
+            if self.is_connected(path):
+                self.ensure_a2dp(mac)
+
+    def apply_priority(self) -> None:
+        self.cfg = load_config()
+        piano = piano_mode_on()
+        info = self.resolve()
+        if piano:
+            self.route_audio(info)
+            time.sleep(0.7)
+            info = self.resolve()
+        self.apply_sink(info.get("audioAddress") or "", info.get("audioConnected") is True, piano)
+
     def apply_sink(self, audio_mac: str, connected: bool, piano: bool) -> None:
         if not self.cfg.get("setDefaultSink", True):
             return
@@ -461,8 +567,9 @@ class WuBt10:
                 log(f"default sink restored -> {prev}")
 
     def loop(self) -> None:
-        log("watching Casio WU-BT10 AUDIO + MIDI while piano mode is on")
+        log("watching Casio WU-BT10 MIDI; Bluetooth output follows sink priority")
         last_piano = None
+        last_priority = None
         while True:
             self.set_connectable()
             self.cfg = load_config()
@@ -470,6 +577,10 @@ class WuBt10:
             if last_piano is not None and piano != last_piano:
                 log("piano mode " + ("on" if piano else "off"))
             last_piano = piano
+            priority = tuple(self.cfg.get("sinkPriority") or [])
+            if last_priority is not None and priority != last_priority:
+                log("output priority -> " + ", ".join(priority))
+            last_priority = priority
 
             info = self.resolve()
             audio_addr, audio_path = info["audioAddress"], info["audioPath"]
@@ -491,11 +602,8 @@ class WuBt10:
                     if now - self.last_wait_log >= 30 and not midi_path:
                         log("waiting for WU-BT10 MIDI advertisement (piano must be on)")
                         self.last_wait_log = now
-                if not audio_on and audio_path and audio_addr:
-                    self.connect_path(audio_path, audio_addr, "WU-BT10 AUDIO", midi=False)
-                if audio_on and audio_addr:
-                    self.ensure_a2dp(audio_addr)
-                if piano and not midi_on:
+                self.route_audio(info)
+                if not midi_on:
                     self.start_discovery(le_only=True)
                 else:
                     self.stop_discovery()
@@ -507,8 +615,14 @@ class WuBt10:
                 self.a2dp_ready.clear()
                 self.stop_discovery()
 
-            self.apply_sink(audio_addr, audio_on, piano)
-            time.sleep(POLL_SCAN_S if (piano and not midi_on) else POLL_OK_S)
+            info = self.resolve()
+            self.apply_sink(info["audioAddress"], info["audioConnected"], piano)
+            waiting_output = False
+            if piano:
+                prefer = self.preferred_pattern()
+                mac, path, _label = self.match_output(prefer)
+                waiting_output = bool(path) and not self.is_connected(path)
+            time.sleep(POLL_SCAN_S if (piano and (not midi_on or waiting_output)) else POLL_OK_S)
 
 
 def print_status() -> int:
@@ -531,10 +645,15 @@ def print_config() -> int:
     return 0
 
 
+def apply_once() -> int:
+    WuBt10().apply_priority()
+    return 0
+
+
 def main(argv: list[str]) -> int:
     cmd = argv[1] if len(argv) > 1 else ""
     if cmd in ("-h", "--help", "help"):
-        print("Usage: keep-alive | keep-alive status | keep-alive sinks | keep-alive config")
+        print("Usage: keep-alive | keep-alive status | keep-alive sinks | keep-alive config | keep-alive apply")
         return 0
     if cmd == "status":
         return print_status()
@@ -542,6 +661,8 @@ def main(argv: list[str]) -> int:
         return print_sinks()
     if cmd == "config":
         return print_config()
+    if cmd == "apply":
+        return apply_once()
     try:
         WuBt10().loop()
     except KeyboardInterrupt:

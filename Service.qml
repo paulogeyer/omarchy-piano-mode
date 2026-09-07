@@ -162,7 +162,18 @@ Item {
     var list = []
     for (var i = 0; i < deviceModel.count; i++)
       list.push(deviceModel.get(i).label)
-    patch(function(next) { next.sinkPriority = list })
+    hydrating = false
+    var next = Config.clone(cfg)
+    next.sinkPriority = list
+    cfg = next
+    settingsFile.setText(Config.stringify(cfg))
+    applyPriority()
+  }
+
+  function applyPriority() {
+    if (pluginDir === "" || applyProc.running) return
+    applyProc.command = [keepAlive, "apply"]
+    applyProc.running = true
   }
 
   function moveDevice(from, to) {
@@ -233,6 +244,17 @@ Item {
   Process {
     id: toggleProc
     running: false
+  }
+
+  Process {
+    id: applyProc
+    running: false
+    stdout: SplitParser {
+      onRead: function(line) {
+        if (String(line).trim() !== "")
+          console.log("casio.wu-bt10-piano", String(line).trim())
+      }
+    }
   }
 
   Process {
@@ -336,7 +358,7 @@ Item {
             Text {
               width: parent.width
               wrapMode: Text.WordWrap
-              text: "When piano mode is on, the first connected Bluetooth audio device in this list becomes the default output. Drag to set the order."
+              text: "When piano mode is on, the first device in this list is connected and becomes the output. Other Bluetooth audio may be disconnected so it can connect. MIDI stays on either way."
               color: Qt.darker(root.foreground, 1.4)
               font.family: root.fontFamily
               font.pixelSize: Style.font.caption
@@ -364,7 +386,7 @@ Item {
             Text {
               width: parent.width
               wrapMode: Text.WordWrap
-              text: "Drag a row to change priority. First in the list wins."
+              text: "Drag a row to change priority. First in the list is connected and used."
               color: Qt.darker(root.foreground, 1.4)
               font.family: root.fontFamily
               font.pixelSize: Style.font.caption
@@ -444,8 +466,7 @@ Item {
                         }
 
                         Text {
-                          visible: available
-                          text: "connected"
+                          text: available ? "connected" : "not connected"
                           color: Qt.darker(root.foreground, 1.5)
                           font.family: root.fontFamily
                           font.pixelSize: Style.font.caption

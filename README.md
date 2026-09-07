@@ -70,10 +70,11 @@ exclusively.
 Empty addresses mean “match by name”. Set MACs if several WU-BT10 dongles
 are in range.
 
-When piano mode is on, the plugin sets the default PipeWire output from the
-**Bluetooth audio** devices in this list. Drag rows to set the order; the
-first connected device wins. **WU-BT10 AUDIO** is first by default. Turning
-piano mode off restores the previous output.
+When piano mode is on, the plugin connects the **first Bluetooth audio**
+device in this list and makes it the default output. Other Bluetooth audio
+may be disconnected so that device can connect (one A2DP headset at a time
+on most adapters). MIDI stays connected either way. Turning piano mode off
+restores the previous output.
 
 Right-click the piano icon (or run `omarchy-shell casio.wu-bt10-piano settings`)
 to toggle this and drag devices into order.
