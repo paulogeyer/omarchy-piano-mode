@@ -23,6 +23,11 @@ BarWidget {
     return configHome + "/omarchy/plugins/casio.wu-bt10-piano"
   }
   readonly property string pianoMode: pluginDir + "/bin/piano-mode"
+  readonly property string flagPath: {
+    var home = Quickshell.env("HOME") || ""
+    var stateHome = Quickshell.env("XDG_STATE_HOME") || (home + "/.local/state")
+    return stateHome + "/omarchy/piano-mode/enabled"
+  }
 
   implicitWidth: vertical ? barSize : Style.bar.iconSlot
   implicitHeight: vertical ? Style.bar.iconSlot : barSize
@@ -49,6 +54,13 @@ BarWidget {
 
   Component.onCompleted: refresh()
 
+  FileView {
+    path: root.flagPath
+    watchChanges: true
+    onLoaded: root.pianoOn = true
+    onLoadFailed: root.pianoOn = false
+  }
+
   Timer {
     interval: 1000
     running: true
@@ -65,10 +77,11 @@ BarWidget {
       onStreamFinished: {
         try {
           var info = JSON.parse(String(text || "{}"))
-          root.pianoOn = info.enabled === true || info.pianoMode === true
           root.audioOn = info.audioConnected === true
           root.midiOn = info.midiConnected === true
           root.audioExpected = info.audioExpected === true
+          if (info.enabled === true || info.pianoMode === true)
+            root.pianoOn = true
         } catch (e) {
         }
       }
