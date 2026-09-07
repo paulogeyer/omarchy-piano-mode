@@ -71,7 +71,8 @@ Empty addresses mean “match by name”. Set MACs if several WU-BT10 dongles
 are in range.
 
 When piano mode is on, the plugin connects **WU-BT10 AUDIO** whenever that
-device is paired, and keeps **WU-BT10 MIDI** up. Other Bluetooth speakers
+device is paired, and keeps **WU-BT10 MIDI** up with a continuous LE scan
+(MIDI is unpaired; BlueZ deletes it if scan stops). Other Bluetooth speakers
 may be disconnected so AUDIO can connect (most adapters only allow one A2DP
 headset). The priority list then picks the default among connected devices.
 Turning piano mode off stops reconnecting and restores the previous

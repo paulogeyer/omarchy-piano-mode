@@ -247,21 +247,19 @@ class WuBt10:
             log(f"SetDiscoveryFilter: {exc.message}")
 
     def start_discovery(self, le_only: bool = True) -> None:
-        if self.adapter_discovering() and not self.discovering:
-            # Another client (for example a headset keep-alive) already holds scan.
-            return
-        self.set_le_filter(le_only)
         if self.discovering:
             return
+        if self.adapter_discovering():
+            return
+        self.set_le_filter(le_only)
         try:
             self.call(self.adapter, ADAPTER_IFACE, "StartDiscovery", None)
             self.discovering = True
             log("LE scan on")
         except GLib.Error as exc:
             if "InProgress" in (exc.message or ""):
-                self.discovering = True
-            else:
-                log(f"StartDiscovery: {exc.message}")
+                return
+            log(f"StartDiscovery: {exc.message}")
 
     def stop_discovery(self) -> None:
         if not self.discovering:
@@ -615,18 +613,17 @@ class WuBt10:
                         log("waiting for WU-BT10 MIDI advertisement (piano must be on)")
                         self.last_wait_log = now
                 self.route_audio(info)
-                if not midi_on:
-                    self.start_discovery(le_only=True)
-                else:
-                    self.stop_discovery()
+                # Keep LE scan on this D-Bus connection the whole time piano
+                # mode is on. MIDI is unpaired; BlueZ deletes it when scan
+                # stops (TemporaryTimeout).
+                self.start_discovery(le_only=True)
             else:
                 self.a2dp_ready.clear()
                 self.stop_discovery()
 
             info = self.resolve()
             self.apply_sink(info["audioAddress"], info["audioConnected"], piano)
-            waiting_audio = bool(piano and audio_path and not self.is_connected(audio_path))
-            time.sleep(POLL_SCAN_S if (piano and (not midi_on or waiting_audio)) else POLL_OK_S)
+            time.sleep(POLL_SCAN_S if piano else POLL_OK_S)
 
 
 def print_status() -> int:
