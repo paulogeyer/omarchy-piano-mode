@@ -27,13 +27,13 @@ MAC overrides go in `~/.config/omarchy/piano-mode.json`.
 ## Install
 
 ```sh
-omarchy plugin add "$HOME/Projects/piano_mode" --enable --yes
+omarchy plugin add https://github.com/paulogeyer/omarchy-piano-mode.git --enable
 ```
 
-Or from git, after this folder is a repository:
+From a local checkout:
 
 ```sh
-omarchy plugin add <git-url> --enable
+omarchy plugin add "$HOME/Projects/piano_mode" --enable --yes
 ```
 
 The shell loads `~/.config/omarchy/plugins/casio.wu-bt10-piano` (a git clone).
