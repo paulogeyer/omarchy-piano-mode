@@ -52,6 +52,17 @@ def log(msg: str) -> None:
     print(msg, flush=True)
 
 
+def is_bluetooth(obj: dict) -> bool:
+    props = obj.get("properties") or {}
+    if str(props.get("device.bus") or "").lower() == "bluetooth":
+        return True
+    api = str(props.get("device.api") or "").lower()
+    if api in ("bluez5", "bluez"):
+        return True
+    name = str(obj.get("name") or "")
+    return name.startswith("bluez_output.") or name.startswith("bluez_card.")
+
+
 def load_config() -> dict:
     cfg = {}
     if DEFAULTS_PATH.is_file():
@@ -73,7 +84,7 @@ def load_config() -> dict:
     cfg.setdefault("adapter", "hci0")
     cfg.setdefault("setDefaultSink", True)
     if not isinstance(cfg.get("sinkPriority"), list) or not cfg["sinkPriority"]:
-        cfg["sinkPriority"] = ["WU-BT10 AUDIO", "HDMI", "Headphones", "Speaker"]
+        cfg["sinkPriority"] = ["WU-BT10 AUDIO"]
     cfg["sinkPriority"] = [str(item).strip() for item in cfg["sinkPriority"] if str(item).strip()]
     return cfg
 
@@ -343,7 +354,59 @@ class WuBt10:
                     "name": name,
                     "description": description,
                     "available": available,
+                    "bluetooth": is_bluetooth(sink),
                 })
+        return out
+
+    def list_bluetooth_outputs(self) -> list[dict]:
+        out: list[dict] = []
+        seen: set[str] = set()
+
+        def add(name: str, description: str, available: bool) -> None:
+            label = (description or name or "").strip()
+            if not label:
+                return
+            key = label.lower()
+            if key in seen:
+                if available:
+                    for item in out:
+                        if item["description"].lower() == key:
+                            item["available"] = True
+                            if name:
+                                item["name"] = name
+                            break
+                return
+            seen.add(key)
+            out.append({
+                "name": name,
+                "description": label,
+                "available": bool(available),
+                "bluetooth": True,
+            })
+
+        for sink in self.list_sinks():
+            if sink.get("bluetooth"):
+                add(sink.get("name") or "", sink.get("description") or "", bool(sink.get("available")))
+
+        try:
+            raw = subprocess.check_output(
+                ["pactl", "--format=json", "list", "cards"], text=True, timeout=3
+            )
+            cards = json.loads(raw)
+        except (subprocess.SubprocessError, json.JSONDecodeError, FileNotFoundError):
+            cards = []
+        for card in cards:
+            if not is_bluetooth(card):
+                continue
+            props = card.get("properties") or {}
+            desc = (
+                props.get("device.description")
+                or props.get("device.nick")
+                or card.get("name")
+                or ""
+            )
+            add(card.get("name") or "", str(desc), False)
+
         return out
 
     def sink_matches(self, sink: dict, pattern: str, audio_mac: str) -> bool:
@@ -361,7 +424,7 @@ class WuBt10:
         return False
 
     def pick_sink(self, audio_mac: str) -> str:
-        sinks = [s for s in self.list_sinks() if s.get("available")]
+        sinks = [s for s in self.list_sinks() if s.get("available") and s.get("bluetooth")]
         for pattern in self.cfg.get("sinkPriority") or []:
             for sink in sinks:
                 if self.sink_matches(sink, pattern, audio_mac):
@@ -457,7 +520,7 @@ def print_status() -> int:
 
 
 def print_sinks() -> int:
-    json.dump(WuBt10().list_sinks(), sys.stdout)
+    json.dump(WuBt10().list_bluetooth_outputs(), sys.stdout)
     sys.stdout.write("\n")
     return 0
 

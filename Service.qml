@@ -1,4 +1,5 @@
 import QtQuick
+import QtQml.Models
 import Quickshell
 import Quickshell.Io
 import Quickshell.Wayland
@@ -26,6 +27,7 @@ Item {
   property var cfg: Config.defaults()
   property var liveSinks: []
   property bool hydrating: false
+  property bool dragging: false
 
   property color background: Color.menu.background
   property color foreground: Color.menu.text
@@ -58,6 +60,7 @@ Item {
   function applyLoaded(raw) {
     cfg = Config.parse(raw)
     hydrating = false
+    rebuildDeviceList()
   }
 
   function patch(mutator) {
@@ -67,36 +70,120 @@ Item {
     saveSoon.restart()
   }
 
-  function movePriority(index, delta) {
-    patch(function(next) {
-      var list = next.sinkPriority.slice()
-      var dest = index + delta
-      if (dest < 0 || dest >= list.length) return
-      var item = list[index]
-      list.splice(index, 1)
-      list.splice(dest, 0, item)
-      next.sinkPriority = list
-    })
+  function patternKey(value) {
+    return String(value || "").trim().toLowerCase()
   }
 
-  function removePriority(index) {
-    patch(function(next) {
-      var list = next.sinkPriority.slice()
-      list.splice(index, 1)
-      next.sinkPriority = list
-    })
+  function sinkMatches(sink, pattern) {
+    var pat = patternKey(pattern)
+    if (!pat || !sink) return false
+    return patternKey(sink.name).indexOf(pat) !== -1
+        || patternKey(sink.description).indexOf(pat) !== -1
   }
 
-  function addPriority(pattern) {
-    var item = String(pattern || "").trim()
-    if (!item) return
-    patch(function(next) {
-      var list = next.sinkPriority.slice()
-      for (var i = 0; i < list.length; i++)
-        if (String(list[i]) === item) return
-      list.push(item)
-      next.sinkPriority = list
-    })
+  function isBluetoothSink(sink) {
+    if (!sink) return false
+    if (sink.bluetooth === true) return true
+    if (sink.bluetooth === false) return false
+    var name = patternKey(sink.name)
+    return name.indexOf("bluez") !== -1 || name.indexOf("wu-bt10") !== -1
+  }
+
+  function isWiredFallback(pattern) {
+    var p = patternKey(pattern)
+    return p === "hdmi" || p === "headphones" || p === "speaker"
+  }
+
+  function keepPattern(pattern) {
+    var pat = String(pattern || "").trim()
+    if (!pat) return false
+    if (patternKey(pat) === patternKey(cfg.audioName)) return true
+    var matchedBt = false
+    var matchedWired = false
+    for (var i = 0; i < liveSinks.length; i++) {
+      var s = liveSinks[i]
+      if (!sinkMatches(s, pat)) continue
+      if (isBluetoothSink(s)) matchedBt = true
+      else matchedWired = true
+    }
+    if (matchedBt) return true
+    if (matchedWired) return false
+    return !isWiredFallback(pat)
+  }
+
+  function rebuildDeviceList() {
+    if (dragging) return
+    var list = []
+    var seen = {}
+
+    function add(label, available) {
+      var text = String(label || "").trim()
+      if (!text) return
+      var key = patternKey(text)
+      if (seen[key]) {
+        if (available) {
+          for (var i = 0; i < list.length; i++) {
+            if (patternKey(list[i].label) === key)
+              list[i].available = true
+          }
+        }
+        return
+      }
+      seen[key] = true
+      list.push({ label: text, available: !!available })
+    }
+
+    var pri = (cfg && cfg.sinkPriority) ? cfg.sinkPriority : []
+    for (var i = 0; i < pri.length; i++) {
+      if (!keepPattern(pri[i])) continue
+      var avail = false
+      for (var j = 0; j < liveSinks.length; j++) {
+        if (!isBluetoothSink(liveSinks[j])) continue
+        if (sinkMatches(liveSinks[j], pri[i])) {
+          avail = liveSinks[j].available !== false
+          break
+        }
+      }
+      add(pri[i], avail)
+    }
+    for (var k = 0; k < liveSinks.length; k++) {
+      var s = liveSinks[k]
+      if (!isBluetoothSink(s)) continue
+      add(s.description || s.name, s.available !== false)
+    }
+    if (cfg && cfg.audioName) add(cfg.audioName, false)
+
+    deviceModel.clear()
+    for (var n = 0; n < list.length; n++)
+      deviceModel.append(list[n])
+  }
+
+  function persistDeviceOrder() {
+    var list = []
+    for (var i = 0; i < deviceModel.count; i++)
+      list.push(deviceModel.get(i).label)
+    patch(function(next) { next.sinkPriority = list })
+  }
+
+  function moveDevice(from, to) {
+    if (from === to || from < 0 || to < 0 || to >= deviceModel.count) return
+    dragging = true
+    deviceModel.move(from, to, 1)
+    dragging = false
+    persistDeviceOrder()
+  }
+
+  function dropIndex(wrapItem, rowItem) {
+    if (!wrapItem || !rowItem) return 0
+    var p = rowItem.mapToItem(deviceList, 0, rowItem.height / 2)
+    var h = wrapItem.height
+    if (h <= 0) return 0
+    var dest = Math.round((p.y - h / 2) / h)
+    return Math.max(0, Math.min(deviceModel.count - 1, dest))
+  }
+
+  ListModel {
+    id: deviceModel
   }
 
   Timer {
@@ -155,8 +242,18 @@ Item {
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {
-        try { root.liveSinks = JSON.parse(String(text || "[]")) }
-        catch (e) { root.liveSinks = [] }
+        try {
+          var parsed = JSON.parse(String(text || "[]"))
+          var only = []
+          for (var i = 0; i < parsed.length; i++) {
+            if (root.isBluetoothSink(parsed[i]))
+              only.push(parsed[i])
+          }
+          root.liveSinks = only
+        } catch (e) {
+          root.liveSinks = []
+        }
+        root.rebuildDeviceList()
       }
     }
   }
@@ -211,6 +308,7 @@ Item {
         Keys.onEscapePressed: root.closeSettings()
 
         Flickable {
+          id: settingsFlickable
           anchors.fill: parent
           anchors.topMargin: card.contentTopInset
           anchors.rightMargin: card.contentRightInset
@@ -220,6 +318,7 @@ Item {
           contentHeight: body.implicitHeight
           clip: true
           boundsBehavior: Flickable.StopAtBounds
+          interactive: !root.dragging
 
           Column {
             id: body
@@ -237,7 +336,7 @@ Item {
             Text {
               width: parent.width
               wrapMode: Text.WordWrap
-              text: "When piano mode is on, pick which output becomes the default. First match in the list wins. WU-BT10 AUDIO is first by default."
+              text: "When piano mode is on, the first connected Bluetooth audio device in this list becomes the default output. Drag to set the order."
               color: Qt.darker(root.foreground, 1.4)
               font.family: root.fontFamily
               font.pixelSize: Style.font.caption
@@ -246,7 +345,7 @@ Item {
             Toggle {
               width: parent.width
               label: "Change default output in piano mode"
-              description: "Switch to the first available device in the priority list, then restore the previous output when piano mode turns off."
+              description: "Switch to the first available Bluetooth device in the list, then restore the previous output when piano mode turns off."
               checked: root.cfg.setDefaultSink === true
               foreground: root.foreground
               accent: root.accent
@@ -257,82 +356,124 @@ Item {
             PanelSeparator { foreground: root.foreground }
 
             PanelSectionHeader {
-              text: "OUTPUT PRIORITY"
+              text: "BLUETOOTH OUTPUTS"
               foreground: root.foreground
               fontFamily: root.fontFamily
             }
 
-            Repeater {
-              model: root.cfg.sinkPriority
-
-              Row {
-                required property var modelData
-                required property int index
-                width: body.width
-                spacing: Style.space(6)
-
-                Text {
-                  width: parent.width - Style.space(150)
-                  elide: Text.ElideRight
-                  text: String(modelData)
-                  color: root.foreground
-                  font.family: root.fontFamily
-                  font.pixelSize: Style.font.bodySmall
-                  anchors.verticalCenter: parent.verticalCenter
-                }
-
-                Button {
-                  text: "Up"
-                  bordered: true
-                  foreground: root.foreground
-                  fontFamily: root.fontFamily
-                  fontSize: Style.font.caption
-                  enabled: index > 0
-                  onClicked: root.movePriority(index, -1)
-                }
-                Button {
-                  text: "Down"
-                  bordered: true
-                  foreground: root.foreground
-                  fontFamily: root.fontFamily
-                  fontSize: Style.font.caption
-                  enabled: index < root.cfg.sinkPriority.length - 1
-                  onClicked: root.movePriority(index, 1)
-                }
-                Button {
-                  text: "Remove"
-                  bordered: true
-                  foreground: root.foreground
-                  fontFamily: root.fontFamily
-                  fontSize: Style.font.caption
-                  onClicked: root.removePriority(index)
-                }
-              }
-            }
-
             Text {
-              visible: root.liveSinks.length > 0
-              text: "Add a live output"
+              width: parent.width
+              wrapMode: Text.WordWrap
+              text: "Drag a row to change priority. First in the list wins."
               color: Qt.darker(root.foreground, 1.4)
               font.family: root.fontFamily
               font.pixelSize: Style.font.caption
             }
 
-            Flow {
+            Text {
+              visible: deviceModel.count === 0
               width: parent.width
-              spacing: Style.space(6)
+              wrapMode: Text.WordWrap
+              text: "No Bluetooth audio devices found."
+              color: Qt.darker(root.foreground, 1.4)
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+            }
+
+            Column {
+              id: deviceList
+              width: parent.width
+              spacing: 0
 
               Repeater {
-                model: root.liveSinks
+                model: deviceModel
 
-                Button {
-                  required property var modelData
-                  text: String(modelData.description || modelData.name || "")
-                  bordered: true
-                  foreground: root.foreground
-                  fontFamily: root.fontFamily
-                  fontSize: Style.font.caption
-                  onClicked: root.addPriority(text)
+                Item {
+                  id: wrap
+                  required property int index
+                  required property string label
+                  required property bool available
+                  width: deviceList.width
+                  height: Style.space(44)
+                  z: dragArea.drag.active ? 2 : 0
+
+                  Rectangle {
+                    id: row
+                    width: parent.width
+                    height: parent.height
+                    radius: Style.cornerRadius
+                    color: dragArea.drag.active
+                           ? Qt.alpha(root.accent, 0.18)
+                           : (dragArea.containsMouse ? Qt.alpha(root.foreground, 0.08) : "transparent")
+
+                    Row {
+                      anchors.fill: parent
+                      anchors.leftMargin: Style.space(8)
+                      anchors.rightMargin: Style.space(8)
+                      spacing: Style.space(10)
+
+                      Text {
+                        text: "\u2261"
+                        color: Qt.darker(root.foreground, 1.25)
+                        font.family: root.fontFamily
+                        font.pixelSize: Style.font.body
+                        anchors.verticalCenter: parent.verticalCenter
+                      }
+
+                      Text {
+                        width: Style.space(22)
+                        text: String(index + 1)
+                        color: Qt.darker(root.foreground, 1.4)
+                        font.family: root.fontFamily
+                        font.pixelSize: Style.font.caption
+                        anchors.verticalCenter: parent.verticalCenter
+                      }
+
+                      Column {
+                        width: parent.width - Style.space(80)
+                        anchors.verticalCenter: parent.verticalCenter
+                        spacing: Style.space(2)
+
+                        Text {
+                          width: parent.width
+                          elide: Text.ElideRight
+                          text: String(label)
+                          color: root.foreground
+                          font.family: root.fontFamily
+                          font.pixelSize: Style.font.bodySmall
+                        }
+
+                        Text {
+                          visible: available
+                          text: "connected"
+                          color: Qt.darker(root.foreground, 1.5)
+                          font.family: root.fontFamily
+                          font.pixelSize: Style.font.caption
+                        }
+                      }
+                    }
+
+                    MouseArea {
+                      id: dragArea
+                      anchors.fill: parent
+                      hoverEnabled: true
+                      cursorShape: pressed ? Qt.ClosedHandCursor : Qt.OpenHandCursor
+                      drag.target: row
+                      drag.axis: Drag.YAxis
+                      drag.smoothed: false
+                      onPressed: root.dragging = true
+                      onReleased: {
+                        var dest = root.dropIndex(wrap, row)
+                        row.y = 0
+                        root.dragging = false
+                        root.moveDevice(index, dest)
+                      }
+                      onCanceled: {
+                        row.y = 0
+                        root.dragging = false
+                      }
+                    }
+                  }
                 }
               }
             }
@@ -344,7 +485,10 @@ Item {
               foreground: root.foreground
               fontFamily: root.fontFamily
               fontSize: Style.font.bodySmall
-              onClicked: root.closeSettings()
+              onClicked: {
+                root.persistDeviceOrder()
+                root.closeSettings()
+              }
             }
           }
         }

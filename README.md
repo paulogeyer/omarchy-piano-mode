@@ -63,21 +63,20 @@ exclusively.
   "midiAddress": "",
   "adapter": "hci0",
   "setDefaultSink": true,
-  "sinkPriority": ["WU-BT10 AUDIO", "HDMI", "Headphones", "Speaker"]
+  "sinkPriority": ["WU-BT10 AUDIO"]
 }
 ```
 
 Empty addresses mean “match by name”. Set MACs if several WU-BT10 dongles
 are in range.
 
-When piano mode is on, the plugin can set the default PipeWire output from
-an ordered list. **WU-BT10 AUDIO** is first by default, so the piano speakers
-win when they are connected. Later entries are fallbacks (HDMI, headphones,
-laptop speaker, or any live sink you add). Turning piano mode off restores
-the previous output.
+When piano mode is on, the plugin sets the default PipeWire output from the
+**Bluetooth audio** devices in this list. Drag rows to set the order; the
+first connected device wins. **WU-BT10 AUDIO** is first by default. Turning
+piano mode off restores the previous output.
 
 Right-click the piano icon (or run `omarchy-shell casio.wu-bt10-piano settings`)
-to toggle this and reorder the list.
+to toggle this and drag devices into order.
 
 ## Files
 

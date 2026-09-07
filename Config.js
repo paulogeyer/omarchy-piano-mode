@@ -6,7 +6,7 @@ function defaults() {
     midiAddress: "",
     adapter: "hci0",
     setDefaultSink: true,
-    sinkPriority: ["WU-BT10 AUDIO", "HDMI", "Headphones", "Speaker"]
+    sinkPriority: ["WU-BT10 AUDIO"]
   }
 }
 

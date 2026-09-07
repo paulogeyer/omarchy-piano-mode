@@ -6,9 +6,6 @@
   "adapter": "hci0",
   "setDefaultSink": true,
   "sinkPriority": [
-    "WU-BT10 AUDIO",
-    "HDMI",
-    "Headphones",
-    "Speaker"
+    "WU-BT10 AUDIO"
   ]
 }
