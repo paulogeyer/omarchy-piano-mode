@@ -183,10 +183,10 @@ Item {
 
   function missingKey() {
     if (!pianoOn) return ""
-    var parts = []
-    if (audioExpected && !audioOn) parts.push("AUDIO")
-    if (!midiOn) parts.push("MIDI")
-    return parts.join("+")
+    if (!audioOn && !midiOn) return "both-missing"
+    if (audioOn && !midiOn) return "only-audio"
+    if (!audioOn && midiOn) return "only-midi"
+    return ""
   }
 
   function applyStatus(raw) {
@@ -219,17 +219,19 @@ Item {
     }
     if (key === notifiedMissing) return
     notifiedMissing = key
-    var both = key.indexOf("+") !== -1
-    var title = "WU-BT10 " + key.replace("+", " and ") + " unavailable"
-    var body = both
-      ? "Piano mode is on, but neither AUDIO nor MIDI is connected."
-      : (key === "AUDIO"
-        ? "Piano mode is on, but the piano speakers are not connected."
-        : "Piano mode is on, but MIDI is not connected.")
+    var title = "Restart the piano"
+    var body = "Only WU-BT10 AUDIO is up. Restart the piano so AUDIO and MIDI both connect."
+    var urgency = "normal"
+    if (key === "both-missing") {
+      title = "Piano looks off"
+      body = "WU-BT10 AUDIO and MIDI were not found. The piano is probably turned off."
+    } else if (key === "only-midi") {
+      body = "Only WU-BT10 MIDI is up. Restart the piano so AUDIO and MIDI both connect."
+    }
     Quickshell.execDetached([
       "notify-send",
       "--app-name=Piano Mode",
-      "--urgency=" + (both ? "critical" : "normal"),
+      "--urgency=" + urgency,
       "--expire-time=10000",
       "--icon=audio-headphones",
       "--replace-id=42110",
