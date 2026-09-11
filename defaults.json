@@ -4,6 +4,7 @@
   "audioAddress": "",
   "midiAddress": "",
   "adapter": "hci0",
+  "autoEnable": true,
   "setDefaultSink": true,
   "sinkPriority": [
     "WU-BT10 AUDIO"

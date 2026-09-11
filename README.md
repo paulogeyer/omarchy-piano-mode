@@ -62,6 +62,7 @@ exclusively.
   "audioAddress": "",
   "midiAddress": "",
   "adapter": "hci0",
+  "autoEnable": true,
   "setDefaultSink": true,
   "sinkPriority": ["WU-BT10 AUDIO"]
 }
@@ -70,11 +71,17 @@ exclusively.
 Empty addresses mean “match by name”. Set MACs if several WU-BT10 dongles
 are in range.
 
+With `autoEnable` (the default), piano mode turns on when WU-BT10 MIDI is
+seen or AUDIO is connected, and turns off after both stay gone for a few
+seconds. A manual off stays off until the piano is powered off and on
+again.
+
 When piano mode is on, the plugin connects **WU-BT10 AUDIO** whenever that
 device is paired, and keeps **WU-BT10 MIDI** up with a continuous LE scan
-(MIDI is unpaired; BlueZ deletes it if scan stops). If another Bluetooth
-headset is already connected, AUDIO is left alone so that headset can stay
-up. The priority list then picks the default among connected devices.
+(MIDI is unpaired; BlueZ deletes it if scan stops). Another Bluetooth
+headset that is already connected (for example Zone Vibe 100) stays up;
+AUDIO is connected as well. The priority list then picks the default among
+connected devices.
 Turning piano mode off stops reconnecting and restores the previous
 output. It does not disconnect Bluetooth devices.
 

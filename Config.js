@@ -5,6 +5,7 @@ function defaults() {
     audioAddress: "",
     midiAddress: "",
     adapter: "hci0",
+    autoEnable: true,
     setDefaultSink: true,
     sinkPriority: ["WU-BT10 AUDIO"]
   }
@@ -33,6 +34,7 @@ function parse(raw) {
       cfg[key] = overlay[key]
     }
   }
+  cfg.autoEnable = cfg.autoEnable === true
   cfg.setDefaultSink = cfg.setDefaultSink === true
   return cfg
 }

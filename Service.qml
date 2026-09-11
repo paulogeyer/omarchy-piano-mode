@@ -14,11 +14,17 @@ Item {
   property var manifest: null
   property var shell: null
 
-  readonly property string pluginDir: manifest && manifest.__sourceDir ? String(manifest.__sourceDir) : ""
-  readonly property string keepAlive: pluginDir + "/bin/keep-alive"
-  readonly property string pianoMode: pluginDir + "/bin/piano-mode"
   readonly property string home: Quickshell.env("HOME") || ""
   readonly property string configHome: Quickshell.env("XDG_CONFIG_HOME") || (home + "/.config")
+  // Omarchy strips __sourceDir from the public manifest. Fall back to the
+  // install path so keep-alive still starts.
+  readonly property string pluginDir: {
+    var fromManifest = manifest && manifest.__sourceDir ? String(manifest.__sourceDir) : ""
+    if (fromManifest !== "") return fromManifest
+    return configHome + "/omarchy/plugins/casio.wu-bt10-piano"
+  }
+  readonly property string keepAlive: pluginDir + "/bin/keep-alive"
+  readonly property string pianoMode: pluginDir + "/bin/piano-mode"
   readonly property string configPath: configHome + "/omarchy/piano-mode.json"
   readonly property string stateHome: Quickshell.env("XDG_STATE_HOME") || (home + "/.local/state")
   readonly property string flagPath: stateHome + "/omarchy/piano-mode/enabled"
@@ -451,6 +457,17 @@ Item {
               color: Qt.darker(root.foreground, 1.4)
               font.family: root.fontFamily
               font.pixelSize: Style.font.caption
+            }
+
+            Toggle {
+              width: parent.width
+              label: "Auto piano mode"
+              description: "Turn on when the WU-BT10 dongle is seen, and off when it disappears. After you turn it off by hand, it stays off until the piano is powered off and on again."
+              checked: root.cfg.autoEnable === true
+              foreground: root.foreground
+              accent: root.accent
+              fontFamily: root.fontFamily
+              onClicked: root.patch(function(next) { next.autoEnable = !root.cfg.autoEnable })
             }
 
             Toggle {

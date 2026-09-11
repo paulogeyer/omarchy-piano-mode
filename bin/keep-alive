@@ -9,7 +9,9 @@ WU-BT10 MIDI is BLE-only, AddressType=random, and does not support pairing.
 Unpaired LE devices vanish after TemporaryTimeout unless Trusted while the
 object exists. Discovery must stay on this process's D-Bus connection.
 
-Does not touch other Bluetooth audio (headphones, speakers).
+Auto-enables piano mode when WU-BT10 MIDI is seen or AUDIO is connected,
+and auto-disables after both stay gone. Does not touch other Bluetooth
+audio (headphones, speakers).
 """
 from __future__ import annotations
 
@@ -42,6 +44,7 @@ OBJECT_MANAGER = "org.freedesktop.DBus.ObjectManager"
 
 POLL_OK_S = 8
 POLL_SCAN_S = 3
+AUTO_ABSENT_TICKS = 3
 CONNECT_TIMEOUT_MS = 8000
 MIDI_CONNECT_TIMEOUT_MS = 20000
 BACKOFF_MAX_S = 60
@@ -95,6 +98,8 @@ def load_config() -> dict:
     cfg.setdefault("audioAddress", "")
     cfg.setdefault("midiAddress", "")
     cfg.setdefault("adapter", "hci0")
+    cfg.setdefault("autoEnable", True)
+    cfg["autoEnable"] = cfg.get("autoEnable") is True
     cfg.setdefault("setDefaultSink", True)
     if not isinstance(cfg.get("sinkPriority"), list) or not cfg["sinkPriority"]:
         cfg["sinkPriority"] = ["WU-BT10 AUDIO"]
@@ -126,6 +131,8 @@ class WuBt10:
         self.last_wait_log = 0.0
         self.a2dp_ready: set[str] = set()
         self.saved_sink = ""
+        self.hold_off = False
+        self.absent_ticks = 0
 
     def call(self, path: str, iface: str, method: str, params: GLib.Variant | None,
              timeout_ms: int = 5000) -> GLib.Variant | None:
@@ -519,14 +526,8 @@ class WuBt10:
             return
         if not self.is_paired(audio_path):
             return
-        others = [
-            dev for dev in self.connected_audio_devices()
-            if (dev.get("address") or "").upper() != audio_addr.upper()
-        ]
-        if others:
-            # A live headset (for example Zone Vibe 100) is using A2DP.
-            # Don't steal it to force piano speakers.
-            return
+        # Connect AUDIO even if another headset (Zone Vibe 100) is already
+        # up. Do not disconnect that headset; sinkPriority picks the default.
         self.connect_path(audio_path, audio_addr, "WU-BT10 AUDIO", midi=False)
         if self.is_connected(audio_path):
             self.ensure_a2dp(audio_addr)
@@ -540,6 +541,18 @@ class WuBt10:
             time.sleep(0.7)
             info = self.resolve()
         self.apply_sink(info.get("audioAddress") or "", info.get("audioConnected") is True, piano)
+
+    def enable_piano_mode(self) -> None:
+        FLAG_DIR.mkdir(parents=True, exist_ok=True)
+        FLAG.touch()
+        COMPAT_FLAG.parent.mkdir(parents=True, exist_ok=True)
+        COMPAT_FLAG.touch()
+        log("piano mode auto-enabled (WU-BT10 detected)")
+
+    def disable_piano_mode(self) -> None:
+        FLAG.unlink(missing_ok=True)
+        COMPAT_FLAG.unlink(missing_ok=True)
+        log("piano mode auto-disabled (WU-BT10 gone)")
 
     def apply_sink(self, audio_mac: str, connected: bool, piano: bool) -> None:
         if not self.cfg.get("setDefaultSink", True):
@@ -571,26 +584,58 @@ class WuBt10:
                 log(f"default sink restored -> {prev}")
 
     def loop(self) -> None:
-        log("watching Casio WU-BT10 AUDIO + MIDI; connect paired AUDIO in piano mode")
+        log("watching Casio WU-BT10 AUDIO + MIDI; auto piano mode on WU-BT10 presence")
         last_piano = None
         last_priority = None
         while True:
             self.set_connectable()
             self.cfg = load_config()
+            auto = self.cfg.get("autoEnable", True) is True
             piano = piano_mode_on()
             if last_piano is not None and piano != last_piano:
                 log("piano mode " + ("on" if piano else "off"))
-            last_piano = piano
+            if last_piano is True and not piano:
+                self.hold_off = True
+                self.absent_ticks = 0
             priority = tuple(self.cfg.get("sinkPriority") or [])
             if last_priority is not None and priority != last_priority:
                 log("output priority -> " + ", ".join(priority))
             last_priority = priority
+
+            if auto or piano:
+                self.start_discovery(le_only=True)
+            else:
+                self.stop_discovery()
 
             info = self.resolve()
             audio_addr, audio_path = info["audioAddress"], info["audioPath"]
             midi_addr, midi_path = info["midiAddress"], info["midiPath"]
             audio_on = info["audioConnected"]
             midi_on = info["midiConnected"]
+            present = bool(audio_on or midi_on or midi_path)
+
+            if auto:
+                if piano:
+                    if present:
+                        self.absent_ticks = 0
+                    else:
+                        self.absent_ticks += 1
+                        if self.absent_ticks >= AUTO_ABSENT_TICKS:
+                            self.disable_piano_mode()
+                            piano = False
+                            self.hold_off = False
+                elif self.hold_off:
+                    if present:
+                        self.absent_ticks = 0
+                    else:
+                        self.absent_ticks += 1
+                        if self.absent_ticks >= AUTO_ABSENT_TICKS:
+                            self.hold_off = False
+                            log("piano gone; will auto-enable on next detection")
+                elif present:
+                    self.enable_piano_mode()
+                    piano = True
+                    self.absent_ticks = 0
 
             if piano:
                 if midi_path:
@@ -607,17 +652,16 @@ class WuBt10:
                         log("waiting for WU-BT10 MIDI advertisement (piano must be on)")
                         self.last_wait_log = now
                 self.route_audio(info)
-                # Keep LE scan on this D-Bus connection the whole time piano
-                # mode is on. MIDI is unpaired; BlueZ deletes it when scan
-                # stops (TemporaryTimeout).
                 self.start_discovery(le_only=True)
             else:
                 self.a2dp_ready.clear()
-                self.stop_discovery()
+                if not auto:
+                    self.stop_discovery()
 
+            last_piano = piano
             info = self.resolve()
             self.apply_sink(info["audioAddress"], info["audioConnected"], piano)
-            time.sleep(POLL_SCAN_S if piano else POLL_OK_S)
+            time.sleep(POLL_SCAN_S if (piano or auto) else POLL_OK_S)
 
 
 def print_status() -> int:

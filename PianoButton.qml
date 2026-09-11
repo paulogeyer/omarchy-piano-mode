@@ -4,18 +4,29 @@ import Quickshell.Io
 import qs.Commons
 import qs.Ui
 
-BarWidget {
+BarIndicator {
   id: root
-  moduleName: "casio.wu-bt10-piano"
 
   property bool pianoOn: false
   property bool audioOn: false
   property bool midiOn: false
-  property bool audioExpected: false
 
   readonly property bool audioBad: pianoOn && !audioOn
   readonly property bool midiBad: pianoOn && !midiOn
   readonly property color warnColor: (audioBad && midiBad) ? Color.urgent : "#e0b04a"
+
+  active: pianoOn
+  activeText: "\uEC1A"
+  inactiveText: "\uEC1A"
+  useActiveColor: false
+  foreground: (audioBad || midiBad) ? warnColor : (bar ? bar.barForeground : Color.foreground)
+  activeTooltipText: {
+    var bits = []
+    bits.push(audioOn ? "AUDIO on" : "AUDIO missing")
+    bits.push(midiOn ? "MIDI on" : "MIDI missing")
+    return "Piano mode on — " + bits.join(", ")
+  }
+  inactiveTooltipText: "Piano mode"
 
   readonly property string pluginDir: {
     var home = Quickshell.env("HOME") || ""
@@ -28,9 +39,6 @@ BarWidget {
     var stateHome = Quickshell.env("XDG_STATE_HOME") || (home + "/.local/state")
     return stateHome + "/omarchy/piano-mode/enabled"
   }
-
-  implicitWidth: vertical ? barSize : Style.bar.iconSlot
-  implicitHeight: vertical ? Style.bar.iconSlot : barSize
 
   function refresh() {
     if (!statusProc.running) statusProc.running = true
@@ -59,6 +67,13 @@ BarWidget {
   }
 
   Component.onCompleted: refresh()
+  onBarChanged: refresh()
+
+  Connections {
+    target: root.indicatorHost
+    ignoreUnknownSignals: true
+    function onRefreshRequested() { root.refresh() }
+  }
 
   FileView {
     path: root.flagPath
@@ -72,6 +87,7 @@ BarWidget {
     interval: 1000
     running: true
     repeat: true
+    triggeredOnStart: true
     onTriggered: root.refresh()
   }
 
@@ -84,9 +100,10 @@ BarWidget {
       onStreamFinished: {
         try {
           var info = JSON.parse(String(text || "{}"))
+          if (!toggleProc.running)
+            root.pianoOn = info.enabled === true || info.pianoMode === true
           root.audioOn = info.audioConnected === true
           root.midiOn = info.midiConnected === true
-          root.audioExpected = info.audioExpected === true
         } catch (e) {
         }
       }
@@ -99,28 +116,11 @@ BarWidget {
     onExited: root.refresh()
   }
 
-  BarIconButton {
-    id: button
-    anchors.fill: parent
-    bar: root.bar
-    text: "\uEC1A"
-    slotSize: Style.bar.iconSlot
-    dimmed: !root.pianoOn
-    useActiveColor: false
-    foreground: (root.audioBad || root.midiBad)
-                ? root.warnColor
-                : (root.bar ? root.bar.barForeground : Color.foreground)
-    keepSpace: true
-    tooltipText: {
-      if (!root.pianoOn) return "Piano mode"
-      var bits = []
-      bits.push(root.audioOn ? "AUDIO on" : "AUDIO missing")
-      bits.push(root.midiOn ? "MIDI on" : "MIDI missing")
-      return "Piano mode on — " + bits.join(", ")
+  onPressed: function (b) {
+    if (b === Qt.RightButton) {
+      root.openSettings()
+      return
     }
-    onPressed: function(b) {
-      if (b === Qt.RightButton) root.openSettings()
-      else root.toggle()
-    }
+    root.toggle()
   }
 }
