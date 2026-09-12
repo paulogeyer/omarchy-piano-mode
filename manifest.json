@@ -2,7 +2,8 @@
   "schemaVersion": 1,
   "id": "casio.wu-bt10-piano",
   "name": "Piano Mode",
-  "version": "1.8.0",
+  "version": "1.8.1",
+  "author": "Paulo Geyer",
   "license": "MIT",
   "description": "Piano mode for Casio digital pianos with the WU-BT10 dongle: connect AUDIO (A2DP) and MIDI (BLE) together from the Omarchy bar.",
   "kinds": [
