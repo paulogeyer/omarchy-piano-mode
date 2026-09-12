@@ -41,11 +41,20 @@ omarchy plugin add "$HOME/Projects/piano_mode" --enable --yes
 The shell loads `~/.config/omarchy/plugins/casio.wu-bt10-piano` (a git clone).
 Do not symlink that path.
 
+Needs BlueZ (`bluetoothctl`), PipeWire (`pactl`), and Python GObject
+(`python-gobject`).
+
 Click the piano icon on the bar, or:
 
 ```sh
 ~/.config/omarchy/plugins/casio.wu-bt10-piano/bin/piano-mode toggle
 omarchy-shell casio.wu-bt10-piano toggle
+```
+
+## Uninstall
+
+```sh
+omarchy plugin remove casio.wu-bt10-piano --yes
 ```
 
 Close **MUSIC SPACE** on the phone while MIDI is in use; it holds BLE MIDI
